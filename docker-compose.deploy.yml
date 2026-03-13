@@ -1,0 +1,78 @@
+services:
+  searxng:
+    image: docker.io/searxng/searxng:2026.3.6-0716de6bc
+    container_name: oc-searxng
+    restart: unless-stopped
+    environment:
+      - SEARXNG_BASE_URL=http://searxng:8080
+    volumes:
+      - ./config/searxng/settings.yml:/etc/searxng/settings.yml:ro
+    networks:
+      - oc-internal
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8080/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  redis:
+    image: docker.io/redis:7.4-alpine
+    container_name: oc-searxng-redis
+    restart: unless-stopped
+    command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru
+    volumes:
+      - oc-searxng-redis-data:/data
+    networks:
+      - oc-internal
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 15s
+      timeout: 3s
+      retries: 3
+
+  crawl4ai:
+    image: docker.io/unclecode/crawl4ai:0.8.0
+    container_name: oc-crawl4ai
+    restart: unless-stopped
+    shm_size: 1gb
+    networks:
+      - oc-internal
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:11235/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+
+  gateway:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: oc-searxng-gateway
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      - GATEWAY_SEARXNG_URL=http://searxng:8080
+      - GATEWAY_REDIS_URL=redis://redis:6379/0
+      - GATEWAY_CRAWL_SERVICE_URL=http://crawl4ai:11235
+    depends_on:
+      searxng:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      crawl4ai:
+        condition: service_started
+    command: ["uv", "run", "uvicorn", "gateway.app:app", "--host", "0.0.0.0", "--port", "8000"]
+    networks:
+      - oc-internal
+      - cloudflare_default
+    # 不對外開 host port，僅供 cloudflare network 轉發
+
+networks:
+  oc-internal:
+    name: oc-searxng-internal
+  cloudflare_default:
+    external: true
+
+volumes:
+  oc-searxng-redis-data:

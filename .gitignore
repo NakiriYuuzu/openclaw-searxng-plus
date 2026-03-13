@@ -1,0 +1,16 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.pytest_cache/
+.venv/
+
+# Env/config
+.env
+
+# Build/cache
+*.log
+
+# Benchmark artifacts
+benchmark/report.json

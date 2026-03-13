@@ -1,0 +1,75 @@
+services:
+  gateway:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: openclaw-search-gateway
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8000:8000"
+    env_file:
+      - .env
+    environment:
+      - GATEWAY_SEARXNG_URL=http://searxng:8080
+      - GATEWAY_REDIS_URL=redis://redis:6379/0
+      - GATEWAY_CRAWL_SERVICE_URL=http://crawl4ai:11235
+    depends_on:
+      searxng:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      crawl4ai:
+        condition: service_started
+    networks:
+      - openclaw-internal
+
+  searxng:
+    image: docker.io/searxng/searxng:2026.3.6-0716de6bc
+    container_name: openclaw-searxng
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8888:8080"
+    environment:
+      - SEARXNG_BASE_URL=http://localhost:8888
+    volumes:
+      - ./config/searxng/settings.yml:/etc/searxng/settings.yml:ro
+    networks:
+      - openclaw-internal
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8080/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  redis:
+    image: docker.io/redis:7.4-alpine
+    container_name: openclaw-redis
+    restart: unless-stopped
+    volumes:
+      - redis-data:/data
+    networks:
+      - openclaw-internal
+    command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 15s
+      timeout: 3s
+      retries: 3
+
+  crawl4ai:
+    image: docker.io/unclecode/crawl4ai:0.8.0
+    container_name: openclaw-crawl4ai
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:11235:11235"
+    shm_size: 1gb
+    networks:
+      - openclaw-internal
+
+networks:
+  openclaw-internal:
+    driver: bridge
+    internal: false  # needs outbound for SearXNG/crawl services to reach target sites
+
+volumes:
+  redis-data:

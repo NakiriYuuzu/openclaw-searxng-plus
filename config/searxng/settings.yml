@@ -1,0 +1,74 @@
+use_default_settings: true
+
+server:
+  secret_key: "openclaw-searxng-change-in-production"
+  bind_address: "0.0.0.0"
+  port: 8080
+  limiter: false
+
+search:
+  safe_search: 0
+  autocomplete: ""
+  default_lang: "en"
+  formats:
+    - html
+    - json
+
+ui:
+  static_use_hash: true
+
+outgoing:
+  request_timeout: 8.0
+  max_request_timeout: 12.0
+  useragent_suffix: "openclaw-search"
+
+engines:
+  - name: google
+    engine: google
+    shortcut: g
+    disabled: false
+    weight: 1.5
+
+  - name: duckduckgo
+    engine: duckduckgo
+    shortcut: ddg
+    disabled: false
+    weight: 1.2
+
+  - name: bing
+    engine: bing
+    shortcut: bi
+    disabled: false
+    weight: 1.0
+
+  - name: brave
+    engine: brave
+    shortcut: br
+    disabled: false
+    weight: 1.0
+
+  - name: startpage
+    engine: startpage
+    shortcut: sp
+    disabled: false
+    weight: 1.3
+
+  - name: wikipedia
+    engine: wikipedia
+    shortcut: wp
+    disabled: false
+    weight: 0.8
+
+  - name: wikidata
+    engine: wikidata
+    disabled: true
+
+  - name: currency
+    engine: currency_convert
+    disabled: true
+
+  - name: dictzone
+    disabled: true
+
+  - name: libretranslate
+    disabled: true

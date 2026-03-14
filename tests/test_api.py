@@ -1,5 +1,5 @@
 import json
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from httpx import ASGITransport, AsyncClient
@@ -152,3 +152,116 @@ class TestSearchEndpoint:
                 data = resp.json()
                 assert data["results"] == []
                 assert data["total_found"] == 0
+
+
+@pytest.mark.asyncio
+class TestMapEndpoint:
+    async def test_requires_auth(self):
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            resp = await client.post("/map", json={"url": "https://example.com"})
+            assert resp.status_code == 401
+
+    async def test_map_success(self):
+        with patch("gateway.app.discover_urls", new_callable=AsyncMock, return_value={
+            "urls": ["https://example.com/page1"],
+            "total": 1,
+            "source": {"sitemap": 1, "links": 0},
+        }):
+            transport = ASGITransport(app=app)
+            async with AsyncClient(transport=transport, base_url="http://test") as client:
+                resp = await client.post(
+                    "/map",
+                    json={"url": "https://example.com"},
+                    headers=HEADERS,
+                )
+                assert resp.status_code == 200
+                data = resp.json()
+                assert "urls" in data
+                assert "total" in data
+                assert "source" in data
+
+
+@pytest.mark.asyncio
+class TestCrawlSiteEndpoint:
+    async def test_requires_auth(self):
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            resp = await client.post("/crawl/site", json={"url": "https://example.com"})
+            assert resp.status_code == 401
+
+    async def test_get_nonexistent_job(self):
+        with patch("gateway.app._job_manager") as mock_jm:
+            mock_jm.get_job_status = AsyncMock(return_value=None)
+            transport = ASGITransport(app=app)
+            async with AsyncClient(transport=transport, base_url="http://test") as client:
+                resp = await client.get(
+                    "/crawl/site/job_nonexistent",
+                    headers=HEADERS,
+                )
+                assert resp.status_code == 404
+
+    async def test_delete_nonexistent_job(self):
+        with patch("gateway.app._job_manager") as mock_jm:
+            mock_jm.get_job_status = AsyncMock(return_value=None)
+            transport = ASGITransport(app=app)
+            async with AsyncClient(transport=transport, base_url="http://test") as client:
+                resp = await client.delete(
+                    "/crawl/site/job_nonexistent",
+                    headers=HEADERS,
+                )
+                assert resp.status_code == 404
+
+    async def test_delete_completed_job_returns_409(self):
+        with patch("gateway.app._job_manager") as mock_jm:
+            mock_jm.get_job_status = AsyncMock(return_value={"status": "completed", "jobId": "job_123"})
+            transport = ASGITransport(app=app)
+            async with AsyncClient(transport=transport, base_url="http://test") as client:
+                resp = await client.delete(
+                    "/crawl/site/job_123",
+                    headers=HEADERS,
+                )
+                assert resp.status_code == 409
+
+
+@pytest.mark.asyncio
+class TestCrawlSiteSuccess:
+    async def test_create_site_crawl_job(self):
+        with patch("gateway.app._job_manager") as mock_jm:
+            mock_jm.create_job = AsyncMock(return_value="job_test123")
+            mock_jm.get_local_state = MagicMock(return_value={
+                "status": "running",
+                "startedAt": "2026-03-14T00:00:00Z",
+            })
+            with patch("gateway.app._site_crawler", new=MagicMock()):
+                transport = ASGITransport(app=app)
+                async with AsyncClient(transport=transport, base_url="http://test") as client:
+                    resp = await client.post(
+                        "/crawl/site",
+                        json={"url": "https://example.com"},
+                        headers=HEADERS,
+                    )
+                    assert resp.status_code == 200
+                    data = resp.json()
+                    assert data["jobId"] == "job_test123"
+                    assert data["status"] == "running"
+
+
+@pytest.mark.asyncio
+class TestSearchIntegration:
+    async def test_search_with_need_map(self, mock_searxng, mock_cache_miss):
+        with patch("gateway.app.discover_urls", new_callable=AsyncMock, return_value={
+            "urls": ["https://docs.python.org/3/library/"],
+            "total": 1,
+            "source": {"sitemap": 1, "links": 0},
+        }):
+            transport = ASGITransport(app=app)
+            async with AsyncClient(transport=transport, base_url="http://test") as client:
+                resp = await client.post(
+                    "/search",
+                    json={"q": "python", "topK": 3, "needMap": True},
+                    headers=HEADERS,
+                )
+                assert resp.status_code == 200
+                data = resp.json()
+                assert len(data["results"]) > 0

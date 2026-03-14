@@ -1,11 +1,14 @@
+import asyncio
 import hmac
 import ipaddress
-import socket
+import logging
 import time
 from collections import defaultdict
 from urllib.parse import urlparse
 
 from .config import settings
+
+logger = logging.getLogger(__name__)
 
 BLOCKED_NETWORKS = [
     ipaddress.ip_network("0.0.0.0/8"),
@@ -23,6 +26,8 @@ BLOCKED_NETWORKS = [
 ]
 
 ALLOWED_SCHEMES = frozenset({"http", "https"})
+
+_DNS_TIMEOUT = 2.0
 
 
 async def check_url_safety(url: str) -> bool:
@@ -43,13 +48,17 @@ async def check_url_safety(url: str) -> bool:
         return False
 
     try:
-        addr_infos = socket.getaddrinfo(hostname, None)
+        loop = asyncio.get_running_loop()
+        addr_infos = await asyncio.wait_for(
+            loop.getaddrinfo(hostname, None),
+            timeout=_DNS_TIMEOUT,
+        )
         for info in addr_infos:
             ip = ipaddress.ip_address(info[4][0])
             for network in BLOCKED_NETWORKS:
                 if ip in network:
                     return False
-    except (socket.gaierror, ValueError, OSError):
+    except (asyncio.TimeoutError, OSError, ValueError):
         return False
 
     return True
@@ -59,10 +68,13 @@ async def check_url_safety(url: str) -> bool:
 # In-memory sliding-window rate limiter
 # ---------------------------------------------------------------------------
 _rate_buckets: dict[str, list[float]] = defaultdict(list)
+_RATE_BUCKET_CLEANUP_INTERVAL = 300
+_last_cleanup = time.time()
 
 
 def check_rate_limit(client_id: str) -> bool:
     """Return True if the request is within the rate limit."""
+    global _last_cleanup
     now = time.time()
     window = 60.0
     bucket = _rate_buckets[client_id]
@@ -73,6 +85,14 @@ def check_rate_limit(client_id: str) -> bool:
         return False
 
     bucket.append(now)
+
+    # Periodic cleanup of stale buckets to prevent memory leak
+    if now - _last_cleanup > _RATE_BUCKET_CLEANUP_INTERVAL:
+        _last_cleanup = now
+        stale = [k for k, v in _rate_buckets.items() if not v or v[-1] < now - window]
+        for k in stale:
+            del _rate_buckets[k]
+
     return True
 
 

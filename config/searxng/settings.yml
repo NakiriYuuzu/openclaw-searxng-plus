@@ -1,7 +1,7 @@
 use_default_settings: true
 
 server:
-  secret_key: "openclaw-searxng-change-in-production"
+  secret_key: "${SEARXNG_SECRET_KEY}"
   bind_address: "0.0.0.0"
   port: 8080
   limiter: false
@@ -9,7 +9,9 @@ server:
 search:
   safe_search: 0
   autocomplete: ""
-  default_lang: "en"
+  default_lang: ""
+  ban_time_on_fail: 30
+  max_ban_time_on_fail: 120
   formats:
     - html
     - json
@@ -52,6 +54,37 @@ engines:
     shortcut: sp
     disabled: false
     weight: 1.3
+
+  - name: qwant
+    engine: qwant
+    shortcut: qw
+    disabled: false
+    weight: 1.2
+    categories: general
+
+  - name: yahoo
+    engine: yahoo
+    shortcut: yh
+    disabled: false
+    weight: 1.0
+
+  - name: mojeek
+    engine: mojeek
+    shortcut: mj
+    disabled: false
+    weight: 0.8
+
+  - name: presearch
+    engine: presearch
+    shortcut: ps
+    disabled: false
+    weight: 0.7
+
+  - name: google news
+    engine: google_news
+    shortcut: gn
+    disabled: false
+    weight: 1.0
 
   - name: wikipedia
     engine: wikipedia

@@ -13,6 +13,7 @@ async def query_searxng(
     time_range: str | None = None,
     pageno: int = 1,
     categories: str = "general",
+    language: str | None = None,
 ) -> list[dict[str, Any]]:
     """Query SearXNG and return raw result list."""
     params: dict[str, Any] = {
@@ -23,6 +24,8 @@ async def query_searxng(
     }
     if time_range:
         params["time_range"] = time_range
+    if language:
+        params["language"] = language
 
     try:
         async with httpx.AsyncClient(timeout=settings.searxng_timeout) as client:

@@ -1,0 +1,11 @@
+# Chinese ad markers
+廣告|贊助|推薦連結|業配
+立即購買|點此領取|限時優惠|免費試用
+立即申辦|馬上申請|立即開通|立即體驗
+立即下載|掃描立即下載|下載App
+# English ad markers
+sponsored|promoted|advertisement
+buy now|click here|free trial|limited offer
+sign up now|download now|get started free
+# URL affiliate / tracking parameters
+\b(aff|affiliate|partner|tracking|utm_\w+|ref|campaign)(\?|=)

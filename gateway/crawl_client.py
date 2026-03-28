@@ -120,6 +120,8 @@ def _build_payload_variants(url: str, options: CrawlOptions) -> list[dict[str, A
         "max_pages": options.maxPages,
         "only_text": options.onlyMainContent,
         "delay_before_return_html": 2.0,  # Wait for JS rendering
+        "process_iframes": True,  # Merge iframe content into main HTML
+        "remove_overlay_elements": True,  # Remove popups/modals
         "js_code": js_scroll,
         "wait_for": "body",
     }

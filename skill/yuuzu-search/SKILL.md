@@ -1,95 +1,219 @@
 ---
 name: yuuzu-search
-description: Use Yuuzu hosted search gateway whenever the user asks for "oracle-my websearch", a private custom search API, `/yuuzu_search`, or wants to use Yuuzu's own search/crawl gateway instead of generic web search. Handles token-authenticated `/search` and `/crawl` calls, auto-reads `GATEWAY_AUTH_TOKEN` from the shell environment by default, supports `needContent` and `needCrawl`, and includes quick auth/health diagnostics.
+description: Use Yuuzu hosted search gateway (search.yuuzu.net / openclaw-searxng-plus) for web query tasks when the user asks to use "oracle-my websearch", "search.yuuzu.net", or this custom search API. Handles request building, token-authenticated calls to /search, /crawl, /map, and /crawl/site endpoints, parameter tuning (q, topK, freshness, needContent, needCrawl, needMap, needSiteCrawl, format, lang), and quick health/auth diagnostics.
 ---
 
 # Yuuzu Search Gateway
 
-Use this skill to query Yuuzu's hosted search gateway instead of generic web search tools.
-
-## Default auth behavior
-
-Prefer this auth order:
-
-1. `GATEWAY_AUTH_TOKEN` from the current shell environment
-2. If missing, tell the user to export it in shell startup files:
-   - Linux: `~/.bashrc`
-   - macOS zsh: `~/.zshrc`
-3. Do not hardcode the token inside the request body or the skill text sent back to the user.
-
-Also prefer this base URL env when available:
-
-- `YUUZU_SEARCH_BASE_URL` (set this explicitly in your shell environment)
+Use this skill to query Yuuzu's custom search + crawl gateway instead of generic web search tools.
 
 ## Quick Start
 
-### Search endpoint
+Use the Bash tool with inline curl to call the gateway directly. Do NOT pre-check whether the token exists — just run the command. If it fails, show the error output to the user and stop.
 
-- Endpoint: `$YUUZU_SEARCH_BASE_URL/search`
-- Header: `Authorization: Bearer $GATEWAY_AUTH_TOKEN`
-
-Body fields:
-- `q` (required)
-- `topK` (1-50, default 10)
-- `freshness` (`any|day|week|month`)
-- `needContent` (`true|false`)
-- `needCrawl` (`true|false`, optional)
-- `crawlMaxDepth`, `crawlMaxPages`, `crawlTimeoutMs`, `crawlOnlyMainContent`, `crawlBypassCache` (optional when `needCrawl=true`)
-
-Example:
-
+**Token resolution** (inline, single line):
 ```bash
-export YUUZU_SEARCH_BASE_URL="https://your-search-gateway.example.com"
-
-curl -sS "$YUUZU_SEARCH_BASE_URL/search" \
-  -H "Authorization: Bearer $GATEWAY_AUTH_TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{"q":"OpenClaw ACP runtime","freshness":"week","topK":5,"needContent":false,"needCrawl":false}'
+TOKEN=$(grep 'GATEWAY_AUTH_TOKEN' ~/.bashrc ~/.zshrc 2>/dev/null | head -1 | sed "s/^.*GATEWAY_AUTH_TOKEN=['\"]*//" | sed "s/['\"].*$//")
 ```
 
-### Crawl endpoint
+**Base URL:** `https://search.yuuzu.net`
 
-- Endpoint: `$YUUZU_SEARCH_BASE_URL/crawl`
-
-Example:
-
+**Default call pattern** (search example):
 ```bash
-curl -sS "$YUUZU_SEARCH_BASE_URL/crawl" \
-  -H "Authorization: Bearer $GATEWAY_AUTH_TOKEN" \
+TOKEN=$(grep 'GATEWAY_AUTH_TOKEN' ~/.bashrc ~/.zshrc 2>/dev/null | head -1 | sed "s/^.*GATEWAY_AUTH_TOKEN=['\"]*//" | sed "s/['\"].*$//") && curl -sS https://search.yuuzu.net/search \
+  -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
-  -d '{"url":"https://docs.openclaw.ai","maxDepth":1,"maxPages":1,"timeoutMs":12000,"onlyMainContent":true}'
+  -d '{"q":"your query here","topK":5,"freshness":"any"}' | python3 -m json.tool 2>/dev/null || echo "FAILED"
 ```
 
-## Response Expectations
+If the curl call returns an error (401, 403, 5xx, connection refused), report the raw error to the user and stop. Do not retry or attempt token diagnostics.
 
-- `GET /health` => `200` and `{"status":"ok"}`
-- `POST /search` without token => `401`
-- `POST /search` with valid token => `200` and `results[]`
-- `POST /crawl` with valid token => `200` and `result`
+## Endpoints Overview
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| GET | `/health` | Health check |
+| POST | `/search` | Search + optional crawl/map/site-crawl enrichment |
+| POST | `/crawl` | Crawl a single URL |
+| POST | `/map` | Discover URLs from a site (sitemap + link extraction) |
+| POST | `/crawl/site` | Start async site crawler (returns job ID) |
+| GET | `/crawl/site/{job_id}` | Poll site crawl progress + paginated results |
+| DELETE | `/crawl/site/{job_id}` | Cancel a running site crawl |
+
+## POST /search
+
+Core search endpoint with optional enrichment flags.
+
+**Body fields:**
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `q` | string (1..500) | required | Query string |
+| `topK` | int (1..50) | 10 | Max results |
+| `freshness` | `any\|day\|week\|month` | `any` | Time filter |
+| `lang` | string | auto-detect | Force language (`en`, `zh-TW`) |
+| `needContent` | bool | false | Fetch page body via lightweight fetcher |
+| `needCrawl` | bool | false | Deep crawl via Crawl4AI (richer than needContent) |
+| `needMap` | bool | false | Discover related URLs per result domain |
+| `needSiteCrawl` | bool | false | Launch async site crawl per result domain |
+| `format` | `markdown\|text\|html` | `markdown` | Output format (when needCrawl/needSiteCrawl) |
+| `stripLinks` | bool | false | Remove markdown links from content |
+| `crawlMaxDepth` | int (1..5) | 1 | Crawl depth |
+| `crawlMaxPages` | int (1..20) | 1 | Crawl page limit |
+| `crawlTimeoutMs` | int (1000..120000) | 15000 | Crawl timeout |
+| `crawlConcurrency` | int (1..10) | 3 | Parallel crawl workers |
+| `crawlOnlyMainContent` | bool | true | Extract main content only |
+| `crawlBypassCache` | bool | false | Skip cached content |
+| `crawlRespectRobots` | bool | true | Respect robots.txt |
+| `siteCrawlMaxDepth` | int (1..10) | 1 | Site crawl depth |
+| `siteCrawlMaxPages` | int (1..500) | 5 | Site crawl page limit |
+| `siteCrawlConcurrency` | int (1..10) | 3 | Site crawl workers |
+| `siteCrawlIncludePatterns` | string[] | [] | URL include globs |
+| `siteCrawlExcludePatterns` | string[] | [] | URL exclude globs |
+
+**Response fields per result:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `title` | string | Page title |
+| `url` | string | Page URL |
+| `snippet` | string | Sanitized snippet |
+| `content` | string? | Full page content (when needContent/needCrawl) |
+| `score` | float | Hybrid ranking score |
+| `source` | string | Search engine source |
+| `content_partial` | bool | Whether content was truncated |
+| `relatedUrls` | string[]? | Discovered URLs (when needMap) |
+| `siteCrawlJobId` | string? | Async job ID (when needSiteCrawl) |
+
+**Example — basic search:**
+```bash
+TOKEN=$(grep 'GATEWAY_AUTH_TOKEN' ~/.bashrc ~/.zshrc 2>/dev/null | head -1 | sed "s/^.*GATEWAY_AUTH_TOKEN=['\"]*//" | sed "s/['\"].*$//") && curl -sS https://search.yuuzu.net/search \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"q":"OpenClaw ACP runtime","topK":5,"freshness":"week"}'
+```
+
+**Example — with crawl enrichment:**
+```bash
+TOKEN=$(grep 'GATEWAY_AUTH_TOKEN' ~/.bashrc ~/.zshrc 2>/dev/null | head -1 | sed "s/^.*GATEWAY_AUTH_TOKEN=['\"]*//" | sed "s/['\"].*$//") && curl -sS https://search.yuuzu.net/search \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"q":"FastAPI best practices","topK":5,"needCrawl":true,"format":"markdown"}'
+```
+
+## POST /crawl
+
+Crawl a single URL and return cleaned content.
+
+**Body:**
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `url` | string | required | HTTP/HTTPS URL |
+| `maxDepth` | int (1..5) | 1 | Crawl depth |
+| `maxPages` | int (1..20) | 1 | Page limit |
+| `timeoutMs` | int (1000..120000) | 15000 | Timeout |
+| `onlyMainContent` | bool | true | Main content extraction |
+| `bypassCache` | bool | false | Skip cache |
+| `format` | `markdown\|text\|html` | `markdown` | Output format |
+| `respectRobots` | bool | true | Respect robots.txt |
+| `stripLinks` | bool | false | Remove links |
+
+**Response:** `{ result: { url, content, title, markdown, success, partial, source }, timing_ms }`
+
+```bash
+TOKEN=$(grep 'GATEWAY_AUTH_TOKEN' ~/.bashrc ~/.zshrc 2>/dev/null | head -1 | sed "s/^.*GATEWAY_AUTH_TOKEN=['\"]*//" | sed "s/['\"].*$//") && curl -sS https://search.yuuzu.net/crawl \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"url":"https://example.com/article","format":"markdown"}'
+```
+
+## POST /map
+
+Discover URLs from a website via sitemap.xml + HTML link extraction.
+
+**Body:**
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `url` | string | required | Target site URL |
+| `includePatterns` | string[] | [] | URL glob filters |
+| `respectRobots` | bool | true | Filter by robots.txt |
+| `useSitemap` | bool | true | Try sitemap.xml |
+
+**Response:** `{ urls: string[], total: int, source: { sitemap: int, links: int }, timing_ms }`
+
+```bash
+TOKEN=$(grep 'GATEWAY_AUTH_TOKEN' ~/.bashrc ~/.zshrc 2>/dev/null | head -1 | sed "s/^.*GATEWAY_AUTH_TOKEN=['\"]*//" | sed "s/['\"].*$//") && curl -sS https://search.yuuzu.net/map \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"url":"https://docs.example.com","includePatterns":["*/api/*"]}'
+```
+
+## POST /crawl/site (Async)
+
+Start a background site crawl job. Returns immediately with a job ID.
+
+**Body:**
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `url` | string | required | Start URL |
+| `maxDepth` | int (1..10) | 3 | BFS depth |
+| `maxPages` | int (1..500) | 100 | Page limit |
+| `format` | `markdown\|text\|html` | `markdown` | Output format |
+| `respectRobots` | bool | true | Respect robots.txt |
+| `includePatterns` | string[] | [] | URL include globs |
+| `excludePatterns` | string[] | [] | URL exclude globs |
+| `concurrency` | int (1..10) | 3 | Parallel workers |
+| `timeoutMs` | int (1000..600000) | 30000 | Overall timeout |
+
+**Response:** `{ jobId, status, startedAt }`
+
+**Poll progress:** `GET /crawl/site/{jobId}?offset=0&limit=50`
+- Returns `{ jobId, status, progress: { discovered, crawled, failed }, results: [...], resultTotal, offset, limit, timing_ms }`
+- Status: `running` | `completed` | `failed` | `cancelled`
+
+**Cancel:** `DELETE /crawl/site/{jobId}`
+- Returns `{ jobId, status: "cancelled" }` or `409` if already finished.
 
 ## Parameter Guidance
 
-- Use `freshness=week` for fast-moving topics.
-- Use `freshness=any` for broad research.
-- Keep `topK` between 3 and 10 for agent workflows.
-- Set `needContent=true` only when downstream steps need page body text.
-- Set `needCrawl=true` when search results should be auto-enriched with crawl output.
-- Use `/crawl` directly when the user already knows the target URL.
+- `freshness=week` for fast-moving topics; `freshness=any` for broad research.
+- `topK` between 3-10 for agent workflows.
+- `needContent=true` for lightweight body text (fast, cached).
+- `needCrawl=true` for deep content extraction with Readability + Markdown cleaning (slower, higher quality).
+- `needMap=true` to discover sibling pages on result domains.
+- `needSiteCrawl=true` to launch background crawl jobs per domain (check `siteCrawlJobId` in results to poll).
+- `format=markdown` (default) for LLM consumption; `format=text` for plain text; `format=html` for raw HTML.
+- `lang=zh-TW` to force Traditional Chinese ranking boost; omit for auto-detection.
+- `stripLinks=true` when downstream doesn't need hyperlinks in content.
 
 ## Troubleshooting
 
-1. If response is `401`, the shell likely does not have the right `GATEWAY_AUTH_TOKEN`.
-2. If response is `403` with Cloudflare challenge, check Cloudflare rules (WAF/Under Attack/BIC).
-3. If response is `5xx`, verify gateway/searxng/redis/crawl4ai on oracle-my.
-4. If `/search` works but `/crawl` fails, verify Crawl4AI service health and deployment compose.
+1. `403` with Cloudflare challenge => check Cloudflare WAF rules for `search.yuuzu.net`.
+2. `401` => token is missing/invalid.
+3. `429` => rate limit (60 req/min) or max concurrent site crawl jobs reached.
+4. `5xx` => verify gateway/searxng/redis containers on oracle-my.
 
-For detailed ops checklist, read:
-- `references/runbook.md`
+For detailed ops checklist: `references/runbook.md`
+
+## Error Handling
+
+If the curl call fails, show the raw output to the user and stop. Common errors:
+- `401` — token missing or invalid
+- `403` — Cloudflare WAF block
+- `429` — rate limit (60 req/min)
+- `5xx` — gateway/backend down
+
+Do NOT attempt to diagnose or fix token issues. Just report the error.
 
 ## Resources
 
 ### scripts/
-- `scripts/search_request.sh`: env-first query helper for `/search` and `/crawl`.
+- `scripts/search_request.sh` — Search query helper (fallback, prefer inline curl)
+- `scripts/crawl_request.sh` — Single URL crawl helper (fallback)
+- `scripts/map_request.sh` — URL discovery helper (fallback)
 
 ### references/
-- `references/runbook.md`: deployment, diagnostics, and Cloudflare notes.
+- `references/runbook.md` — Full API contract, deployment, diagnostics, and Cloudflare notes
